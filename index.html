@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Input Delivery Sunter</title>
+  <link rel="preconnect" href="https://unpkg.com"/>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <link rel="stylesheet" href="./assets/style.css" />
+</head>
+<body>
+  <div id="loading" class="loading-overlay">
+    <div>Mohon Tunggu...</div>
+  </div>
+
+  <div class="app-header"><h2>Input Delivery Sunter</h2></div>
+
+  <div class="top-section">
+    <button class="btn-main btn-scan" id="btn-scan">📷 SCAN SJKB</button>
+    <input type="text" id="sjkb" placeholder="Nomor SJKB" />
+    <button class="btn-main btn-save" id="btn-kirim">KIRIM DATA</button>
+    <div id="statusLoc" class="muted" style="font-weight:700; margin-bottom:10px;">⏳ Menyiapkan GPS...</div>
+    <button class="btn-main btn-admin" id="btn-admin">📊 MENU ADMIN</button>
+  </div>
+
+  <div class="bottom-section">
+    <div style="font-size: 11px; color: #999; margin-bottom: 10px; font-weight: bold;">HISTORY HARI INI</div>
+    <div id="historyList"></div>
+  </div>
+
+  <div id="reader-container">
+    <div id="reader"></div>
+    <button class="btn-main btn-close" id="btn-cancel">BATAL</button>
+  </div>
+
+  <div id="adminPanel">
+    <select id="lpFilter"></select>
+    <div id="adminHistoryContent"></div>
+    <button class="btn-main" id="btn-back" style="background:#6c757d; margin-top:20px;">KEMBALI</button>
+  </div>
+
+  <script src="./assets/config.js"></script>
+  <script src="./assets/app.js"></script>
+</body>
+</html>
