@@ -23,28 +23,81 @@ function qs(params){
 }
 
 async function apiGet(action, params={}){
-  if(!BACKEND_BASE) throw new Error('BACKEND_BASE belum di-set di assets/config.js');
+  if(!BACKEND_BASE) throw new Error('BACKEND_BASE belum di-set di config.js');
   const res = await fetch(qs({action, ...params}), { method: 'GET', credentials: 'omit' });
   if(!res.ok) throw new Error('HTTP '+res.status);
   const ct = res.headers.get('content-type') || '';
   if(ct.includes('application/json')) return res.json();
-  // fallback when Apps Script returns text/plain
   const txt = await res.text();
   try{ return JSON.parse(txt); }catch(e){ throw new Error('Respon tidak valid'); }
 }
 
-// =============== GPS ===============
+// =============== UTIL ===============
+function haversine(lat1, lon1, lat2, lon2){
+  if([lat1,lon1,lat2,lon2].some(v=>isNaN(v))) return Number.POSITIVE_INFINITY;
+  const R = 6371e3; const toRad=x=>x*Math.PI/180; const dLat=toRad(lat2-lat1); const dLon=toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/**
+ * Cari lokasi terdekat dari gabungan master.asal + master.tujuan.
+ * @return { name: string|null, dist: number|null }  // dist dalam meter
+ */
+function getNearestLocationName(lat, lng, radiusMeters, master) {
+  const all = [
+    ...(master.asal || []),
+    ...(master.tujuan || [])
+  ].filter(it => !isNaN(it.lat) && !isNaN(it.lng));
+
+  let best = null;
+  for (const it of all) {
+    const d = haversine(lat, lng, it.lat, it.lng);
+    if (!best || d < best.dist) {
+      best = { name: it.nama, dist: Math.round(d) };
+    }
+  }
+  if (best && best.dist <= radiusMeters) return best;
+  return { name: null, dist: best ? best.dist : null };
+}
+
+// =============== GPS (DIPERKAYA) ===============
 function initGPS(){
   const el = document.getElementById('statusLoc');
   if(!navigator.geolocation){
-    el.innerText = "❌ GPS tidak didukung browser"; el.style.color='red'; return;
+    el.innerText = "❌ GPS tidak didukung browser";
+    el.style.color = 'red';
+    return;
   }
-  navigator.geolocation.watchPosition(p=>{
-    currentLatLong = p.coords.latitude+","+p.coords.longitude;
+
+  navigator.geolocation.watchPosition(p => {
+    currentLatLong = p.coords.latitude + "," + p.coords.longitude;
     const accTxt = p.coords.accuracy ? ` (±${Math.round(p.coords.accuracy)}m)` : "";
-    el.innerText = "✅ GPS Aktif"+accTxt; el.style.color='green';
-  }, err=>{
-    currentLatLong = ""; el.innerText = "❌ GPS Mati"; el.style.color='red';
+
+    // Pastikan masterLocs sudah ada (di-load di INIT). Jika belum, tampilkan status default.
+    if (!masterLocs || (!masterLocs.asal?.length && !masterLocs.tujuan?.length)) {
+      el.innerText = "✅ GPS Aktif" + accTxt;
+      el.style.color = "green";
+      return;
+    }
+
+    // Cari lokasi terdekat dari database
+    const [lat, lng] = [p.coords.latitude, p.coords.longitude];
+    const nearest = getNearestLocationName(lat, lng, RADIUS_METERS, masterLocs);
+
+    if (nearest.name) {
+      // Dalam radius salah-satu lokasi
+      el.innerText = `✅ GPS Aktif${accTxt} – ${nearest.name} (${nearest.dist}m)`;
+      el.style.color = "green";
+    } else {
+      // Di luar semua lokasi terdaftar
+      el.innerText = `✅ GPS Aktif${accTxt} – di luar lokasi yang terdaftar`;
+      el.style.color = "orange";
+    }
+  }, err => {
+    currentLatLong = "";
+    el.innerText = "❌ GPS Mati";
+    el.style.color = 'red';
   }, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
 }
 
@@ -54,7 +107,7 @@ function startScan(){
   const cont = document.getElementById('reader-container');
   cont.style.display = 'flex';
   scanner = new Html5Qrcode("reader");
-  scanner.start({facingMode: {exact:"environment"}}, { fps: 15, qrbox: 250 }, (txt)=>{
+  scanner.start({facingMode:{exact:"environment"}}, { fps: 15, qrbox: 250 }, (txt)=>{
     document.getElementById('sjkb').value = txt; stopScan(); submitProcess(txt);
   }).catch(()=>{ stopScan(); });
 }
@@ -79,6 +132,7 @@ async function submitProcess(sjkb){
 
   document.getElementById('loading').style.display = 'flex';
   try{
+    // PRE-CHECK history device ini di server
     const history = await apiGet('getHistory', { deviceId });
     const dataLama = history.data.find(h=>h.sjkb === sjkbUp);
     if(dataLama && dataLama.status2 === 'Sampai'){
@@ -86,6 +140,7 @@ async function submitProcess(sjkb){
       return alert('❌ SJKB sudah berstatus SAMPAI.');
     }
 
+    // Tentukan target ASAL/TUJUAN (konsisten dengan aplikasi lama)
     const [uLat, uLng] = currentLatLong.split(',').map(Number);
     let namaLokasi = null;
     const targetCheck = (dataLama && dataLama.status2 === 'Belum Sampai') ? masterLocs.tujuan : masterLocs.asal;
@@ -130,8 +185,13 @@ function renderHistory(data, targetId){
 }
 
 async function loadHistory(){
-  try{ const res = await apiGet('getHistory', { deviceId }); renderHistory(res.data, 'historyList'); }
-  catch(e){ document.getElementById('historyList').innerHTML = '<center>Gagal memuat history</center>'; alert('Gagal memuat history: '+e.message); }
+  try{
+    const res = await apiGet('getHistory', { deviceId });
+    renderHistory(res.data, 'historyList');
+  } catch(e){
+    document.getElementById('historyList').innerHTML = '<center>Gagal memuat history</center>';
+    alert('Gagal memuat history: '+e.message);
+  }
 }
 
 // =============== ADMIN ===============
@@ -148,31 +208,32 @@ async function openAdmin(){
 }
 
 async function loadAdminHistory(){
-  const val = document.getElementById('lpFilter').value; 
-  try{ const res = await apiGet('getHistory', { lp: val || '' }); renderHistory(res.data, 'adminHistoryContent'); }
-  catch(e){ alert('Gagal memuat history admin: '+e.message); }
+  const val = document.getElementById('lpFilter').value;
+  try{
+    const res = await apiGet('getHistory', { lp: val || '' });
+    renderHistory(res.data, 'adminHistoryContent');
+  }catch(e){ alert('Gagal memuat history admin: '+e.message); }
 }
 function closeAdmin(){ document.getElementById('adminPanel').style.display='none'; }
 
-// =============== UTIL ===============
-function haversine(lat1, lon1, lat2, lon2){
-  if([lat1,lon1,lat2,lon2].some(v=>isNaN(v))) return Number.POSITIVE_INFINITY;
-  const R = 6371e3; const toRad=x=>x*Math.PI/180; const dLat=toRad(lat2-lat1); const dLon=toRad(lon2-lon1);
-  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2; return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}
-
-// =============== INIT ===============
+// =============== INIT (URUTAN DIPERBAIKI) ===============
 window.addEventListener('load', async ()=>{
-  document.getElementById('btn-scan').addEventListener('click', startScan);
-  document.getElementById('btn-cancel').addEventListener('click', stopScan);
-  document.getElementById('btn-kirim').addEventListener('click', manualSubmit);
-  document.getElementById('btn-admin').addEventListener('click', openAdmin);
-  document.getElementById('btn-back').addEventListener('click', closeAdmin);
-  document.getElementById('lpFilter').addEventListener('change', loadAdminHistory);
+  // Bind tombol
+  document.getElementById('btn-scan')?.addEventListener('click', startScan);
+  document.getElementById('btn-cancel')?.addEventListener('click', stopScan);
+  document.getElementById('btn-kirim')?.addEventListener('click', manualSubmit);
+  document.getElementById('btn-admin')?.addEventListener('click', openAdmin);
+  document.getElementById('btn-back')?.addEventListener('click', closeAdmin);
+  document.getElementById('lpFilter')?.addEventListener('change', loadAdminHistory);
 
-  initGPS();
+  // Pastikan master lokasi ter-load lebih dulu, baru inisiasi GPS
   try{
-    const res = await apiGet('getMasterLocations'); masterLocs = res.data || { asal: [], tujuan: [] };
-  }catch(e){ alert('Gagal memuat master lokasi: '+e.message); }
+    const res = await apiGet('getMasterLocations');
+    masterLocs = res.data || { asal: [], tujuan: [] };
+  }catch(e){
+    alert('Gagal memuat master lokasi: '+e.message);
+  }
+
+  initGPS();        // <-- dipanggil SETELAH masterLocs tersedia
   loadHistory();
 });
